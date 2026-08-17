@@ -127,3 +127,10 @@ les compléments, réinstaller Office. Voir
 ## Licence
 
 MIT — voir `LICENSE`. Utilisez, modifiez, redistribuez librement.
+
+---
+
+<p align="center">
+  <strong>Gracieuseté de Constructo AI Inc.</strong><br>
+  <sub>Outils d'IA pour la construction au Québec</sub>
+</p>
