@@ -1,0 +1,13 @@
+﻿__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Ne jamais versionner de donnees de messagerie
+*.ost
+*.pst
+*.nst
+*.reg
+exports/
+*.msg
+*.eml

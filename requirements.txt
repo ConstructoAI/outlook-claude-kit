@@ -1,0 +1,3 @@
+﻿# Outlook Claude Kit - dependances
+# Windows uniquement : MAPI/COM n'existe pas ailleurs.
+pywin32>=306
