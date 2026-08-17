@@ -71,6 +71,13 @@ le script et refuseront de s'exécuter autrement.
 
 ## Rédaction
 
+**Avant de rédiger un courriel au nom de l'entreprise, lire
+`profiles/CONSTRUCTO_AI_profil.txt`.** C'est le profil du représentant IA : qui
+est Constructo AI, ce que fait le produit module par module, les objections
+réelles déjà formulées par des clients, et ce qu'il ne faut jamais promettre.
+Sans lui, on écrit poliment et à côté — on décrit un logiciel qu'on ne connaît
+pas, on invente un tarif, on promet une date.
+
 Reprendre la langue et le registre de l'utilisateur et de ses correspondants —
 vouvoiement par défaut en français. Objet porteur d'un identifiant quand il en
 existe un (numéro de facture, de commande, de projet) : c'est ce qui rend le fil

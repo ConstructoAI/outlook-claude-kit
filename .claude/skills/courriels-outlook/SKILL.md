@@ -69,6 +69,12 @@ pas redemander ce qui a déjà été fourni.
 
 ## 4. Rédiger
 
+**Charger d'abord `profiles/CONSTRUCTO_AI_profil.txt`** (à la racine du dépôt).
+Il porte l'identité de l'entreprise, les trente modules du produit, les
+objections que de vrais clients ont déjà écrites, et la liste de ce qu'on ne
+promet jamais — tarifs et délais en tête. Un courriel rédigé sans lui est poli
+et vide : il décrit un logiciel qu'on ne connaît pas.
+
 Toujours en deux temps : **brouillon d'abord**, envoi seulement après accord.
 
 ```bash

@@ -11,3 +11,8 @@ venv/
 exports/
 *.msg
 *.eml
+
+# Etat local du pont (liste des Message-Id deja pousses vers l'ERP).
+# Propre a un poste : le versionner ferait croire a une autre machine que des
+# messages sont deja partis, et ils ne partiraient jamais.
+.bridge_state.json

@@ -32,7 +32,7 @@ Deux garde-fous sont codés en dur, volontairement :
 
 Licence MIT.
 """
-import argparse, json, sys, datetime, os
+import argparse, json, sys, datetime, os, io
 
 try:
     import win32com.client as win32
@@ -325,18 +325,147 @@ def cmd_thread(a):
     emit(rows, a)
 
 
+def compte_envoi(adresse):
+    """Objet Account Outlook correspondant à `adresse`, ou None.
+
+    Sans lui, un brouillon part TOUJOURS du compte par défaut du profil, quel
+    que soit `--account` : le drapeau ne servait qu'à choisir le magasin où
+    LIRE. Avec deux comptes dans le profil (info@constructoai.ca et une adresse
+    Gmail), écrire depuis le mauvais expéditeur est silencieux et se découvre
+    chez le destinataire.
+    """
+    if not adresse:
+        return None
+    comptes = win32.Dispatch("Outlook.Application").Session.Accounts
+    besoin = adresse.lower().strip()
+    for i in range(1, comptes.Count + 1):
+        try:
+            c = comptes.Item(i)
+        except Exception:
+            continue
+        for attribut in ("SmtpAddress", "DisplayName", "UserName"):
+            try:
+                v = (getattr(c, attribut) or "").lower()
+            except Exception:
+                v = ""
+            if v and (besoin == v or besoin in v):
+                return c
+    raise SystemExit(
+        f"compte expéditeur introuvable : {adresse}\n"
+        f"comptes du profil : " + ", ".join(
+            (comptes.Item(i).SmtpAddress or comptes.Item(i).DisplayName or "?")
+            for i in range(1, comptes.Count + 1)))
+
+
+def _poser_expediteur(m, a):
+    """Applique --account comme compte expéditeur, si demandé.
+
+    ⚠️ L'affectation peut être SILENCIEUSEMENT IGNORÉE par Outlook : mesuré le
+    2026-08-17 sur un compte Gmail (IMAP) ajouté au profil — `SendUsingAccount`
+    relisait `None` après affectation, avant ET après `Save()`, en liaison
+    tardive comme précoce, et créer l'élément dans les Brouillons du compte
+    levait « Vous n'avez pas l'autorisation de créer une entrée dans ce
+    dossier ». Le compte était pourtant bien dans `Session.Accounts` et sa
+    boîte lisible. Cause probable : compte non pleinement configuré pour
+    l'envoi côté Outlook, pas un défaut d'API.
+
+    On VÉRIFIE donc que l'affectation a pris, et on refuse plutôt que de
+    laisser partir un brouillon depuis le mauvais expéditeur — une erreur qui
+    ne se découvrirait que chez le destinataire.
+    """
+    demande = getattr(a, "account", None)
+    compte = compte_envoi(demande)
+    if compte is None:
+        return None
+
+    # `SendUsingAccount` n'est PAS relisible via pywin32 : elle rend `None`
+    # après affectation quel que soit le compte, y compris le compte par défaut
+    # pour lequel l'envoi fonctionne. Vérifier par relecture était donc un faux
+    # test — il refusait aussi le cas qui marchait. On raisonne sur le RANG.
+    try:
+        defaut = ns().Accounts.Item(1)
+        est_defaut = (compte.SmtpAddress or "").lower() == (defaut.SmtpAddress or "").lower()
+    except Exception:
+        est_defaut = False
+
+    if est_defaut:
+        return compte  # rien à poser : c'est déjà l'expéditeur naturel
+
+    m.SendUsingAccount = compte
+    print(f"[avertissement] expéditeur « {compte.SmtpAddress} » demandé sur un compte "
+          f"NON PAR DÉFAUT.\n"
+          f"    Outlook ne permet pas de relire ce réglage : je ne peux pas garantir "
+          f"qu'il a pris.\n"
+          f"    OUVRE LE BROUILLON DANS OUTLOOK et vérifie le champ « De » avant "
+          f"d'autoriser l'envoi.", file=sys.stderr)
+    return compte
+
+
+RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def charger_signature(nom):
+    """Lit `profiles/signature_<nom>.html`.
+
+    POURQUOI CE FICHIER PLUTOT QU'OUTLOOK. Les signatures de Sylvain sont
+    INFONUAGIQUES : elles vivent dans la boîte Microsoft 365 et se gèrent depuis
+    Outlook Web. Elles ne redescendent PAS dans
+    `%APPDATA%\\Microsoft\\Signatures` — mesure du 2026-08-17 : ce dossier ne
+    contenait que cinq signatures périmées, dont deux d'entreprises antérieures
+    (`estimationls.ca`, `adamgroup.com`), et AUCUNE des cinq réellement
+    utilisées. Et un brouillon créé par COM ne reçoit jamais de signature :
+    Outlook ne les applique que dans sa propre fenêtre de rédaction.
+
+    La signature a donc été extraite d'un COURRIEL RÉELLEMENT ENVOYÉ — la seule
+    source qui dise ce qui part vraiment. ⚠️ En la ré-extrayant un jour,
+    resserrer les bornes : une première extraction avait emporté la réponse
+    citée, donc l'adresse du destinataire de ce message-là.
+    """
+    chemin = os.path.join(RACINE, "profiles", f"signature_{nom}.html")
+    if not os.path.exists(chemin):
+        dispo = []
+        dossier = os.path.join(RACINE, "profiles")
+        if os.path.isdir(dossier):
+            dispo = [f[10:-5] for f in os.listdir(dossier)
+                     if f.startswith("signature_") and f.endswith(".html")]
+        raise SystemExit(
+            f"signature introuvable : {chemin}\n"
+            f"disponibles : {', '.join(dispo) if dispo else '(aucune)'}\n"
+            f"Pour en ajouter une : l'extraire d'un courriel envoyé qui la porte,\n"
+            f"et l'écrire dans profiles/signature_<nom>.html")
+    with io.open(chemin, encoding="utf-8") as f:
+        return f.read()
+
+
+def _corps_avec_signature(a):
+    """Rend (html, utilise_html) en tenant compte de --signature."""
+    corps = a.body or ""
+    if not getattr(a, "signature", None):
+        return corps, bool(getattr(a, "html_body", False))
+    sig = charger_signature(a.signature)
+    if getattr(a, "html_body", False):
+        return corps + "<br>" + sig, True
+    # Corps en texte + signature HTML : on passe en HTML en préservant les
+    # sauts de ligne, sinon le texte s'affiche en un seul bloc.
+    echappe = (corps.replace("&", "&amp;").replace("<", "&lt;")
+                    .replace(">", "&gt;").replace("\n", "<br>"))
+    return f'<div style="font-family:Aptos,Calibri,sans-serif;font-size:12pt">{echappe}</div><br>{sig}', True
+
+
 def cmd_draft(a):
     m = win32.Dispatch("Outlook.Application").CreateItem(CREATE_MAIL)
+    _poser_expediteur(m, a)
     m.To = a.to
     if a.cc:
         m.CC = a.cc
     if a.bcc:
         m.BCC = a.bcc
     m.Subject = a.subject or ""
-    if a.html_body:
-        m.HTMLBody = a.body or ""
+    corps, en_html = _corps_avec_signature(a)
+    if en_html:
+        m.HTMLBody = corps
     else:
-        m.Body = a.body or ""
+        m.Body = corps
     for p in (a.attach or []):
         if os.path.exists(p):
             m.Attachments.Add(os.path.abspath(p))
@@ -344,16 +473,44 @@ def cmd_draft(a):
             print(f"[avertissement] pièce jointe introuvable : {p}", file=sys.stderr)
     m.Save()
     print(json.dumps(dict(status="brouillon créé", id=m.EntryID,
-                          subject=m.Subject, to=m.To), ensure_ascii=False, indent=2))
+                          subject=m.Subject, to=m.To,
+                          expediteur=_adresse_expediteur(m)),
+                     ensure_ascii=False, indent=2))
+
+
+def _adresse_expediteur(m):
+    """Adresse réellement utilisée à l'envoi, pour la montrer avant d'envoyer."""
+    try:
+        c = m.SendUsingAccount
+        if c is not None:
+            return c.SmtpAddress or c.DisplayName
+    except Exception:
+        pass
+    try:
+        return ns().Accounts.Item(1).SmtpAddress + " (compte par défaut)"
+    except Exception:
+        return "(compte par défaut)"
 
 
 def cmd_reply(a):
     src = ns().GetItemFromID(a.id)
     r = src.ReplyAll() if a.all else src.Reply()
-    r.Body = (a.body or "") + "\n\n" + (r.Body or "")
+    # Par défaut Outlook répond depuis le compte qui a REÇU le message, ce qui
+    # est le bon comportement ; --account permet de le forcer autrement.
+    _poser_expediteur(r, a)
+    if getattr(a, "signature", None):
+        # On écrit AVANT la citation, sans y toucher : `r.HTMLBody` contient
+        # déjà l'original mis en forme par Outlook, et le réécrire en texte
+        # brut le détruirait.
+        tete, _ = _corps_avec_signature(a)
+        r.HTMLBody = tete + (r.HTMLBody or "")
+    else:
+        r.Body = (a.body or "") + "\n\n" + (r.Body or "")
     r.Save()
     print(json.dumps(dict(status="réponse enregistrée en brouillon", id=r.EntryID,
-                          subject=r.Subject, to=r.To), ensure_ascii=False, indent=2))
+                          subject=r.Subject, to=r.To,
+                          expediteur=_adresse_expediteur(r)),
+                     ensure_ascii=False, indent=2))
 
 
 def cmd_send(a):
@@ -460,10 +617,16 @@ def main():
     s.add_argument("--bcc", default="")
     s.add_argument("--attach", nargs="*")
     s.add_argument("--html-body", action="store_true")
+    s.add_argument("--signature", nargs="?", const="sylvain", default=None,
+                   metavar="NOM",
+                   help="ajouter la signature profiles/signature_<NOM>.html "
+                        "(défaut : sylvain). Le corps passe alors en HTML.")
     s = add("reply", cmd_reply, "préparer une réponse en brouillon")
     s.add_argument("--id", required=True)
     s.add_argument("--body", default="")
     s.add_argument("--all", action="store_true")
+    s.add_argument("--signature", nargs="?", const="sylvain", default=None,
+                   metavar="NOM", help="idem pour une réponse")
     s = add("send", cmd_send, "envoyer un brouillon existant")
     s.add_argument("--id", required=True)
     s.add_argument("--yes-send", action="store_true")
