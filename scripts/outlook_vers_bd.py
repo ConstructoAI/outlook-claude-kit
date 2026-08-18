@@ -60,17 +60,19 @@ import outlook_bridge as pont  # noqa: E402  (reutilise les extracteurs MAPI)
 
 SCHEMA = "tenant_constructo_e1f633"
 MARQUEUR = "import-outlook"
-# Marqueur PROPRE A CETTE EXECUTION. Sans lui, `--annuler` n'a aucune notion de
-# run : il compte et supprime TOUS les imports jamais faits. Le message de panne
-# disait « pour les retirer : --annuler --oui » en parlant des lignes du run
-# interrompu — reproduit au retest #205 tour 3 : 1000 lignes d'un import reussi
-# + 200 d'un run casse, la commande recommandee detruisait les 1200. En
-# production cela aurait emporte les 1431 lignes de l'historique.
-# ⚠️ Resolution a la SECONDE + pid. Sans le pid, deux imports demarres dans la
-# meme seconde recevaient le MEME identifiant et devenaient indiscernables :
-# `--annuler --run <id>` en aurait supprime deux, ce qui retablit exactement le
-# defaut que le marqueur de run existe pour empecher. Le detail par execution
-# les fusionnait aussi, donc rien ne signalait la collision.
+# Marqueur PROPRE A CETTE EXECUTION.
+# ⚠️ CE BLOC PARLE DE `--annuler` AU PASSE : le drapeau A ETE RETIRE (cf. la docstring
+# du module). Il est conserve parce qu'il porte la RAISON D'ETRE du marqueur, et cette
+# raison vaut a l'identique pour le `DELETE` manuel qui l'a remplace.
+# Sans marqueur de run, une suppression porte sur TOUS les imports jamais faits.
+# Reproduit au retest #205 tour 3 : 1000 lignes d'un import reussi + 200 d'un run
+# casse, la commande alors recommandee detruisait les 1200. En production cela aurait
+# emporte les 1431 lignes de l'historique.
+# ⚠️ Resolution a la SECONDE + pid. Sans le pid, deux imports demarres dans la meme
+# seconde recevaient le MEME identifiant et devenaient indiscernables : une suppression
+# ciblee en aurait emporte deux, ce qui retablit exactement le defaut que le marqueur
+# existe pour empecher. Le detail par execution les fusionnait aussi, donc rien ne
+# signalait la collision.
 RUN_ID = "run-{}-{}".format(
     datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), os.getpid())
 ERP = Path(r"C:\Dev\Constructo_AI_Prod\ERP_REACT")
@@ -399,9 +401,81 @@ def main() -> int:
 
     ecrits, doublons, echecs = 0, 0, []
     jalonnes = 0  # lignes rendues DURABLES par un commit jalon
-    conn = psycopg2.connect(dsn, connect_timeout=25)
+    # ⚠️ LE FUSEAU SE POSE ICI, DANS LE PAQUET DE DEMARRAGE — PAS PAR UN `SET` PLUS BAS.
+    #
+    # `SQL_INSERT` ecrit `created_at`/`updated_at` avec `CURRENT_TIMESTAMP`, ce qui semble sur.
+    # Ca ne l'est pas : ces colonnes sont `timestamp WITHOUT time zone`, donc PostgreSQL rend
+    # l'instant DANS LE FUSEAU DE LA SESSION puis en jette la zone. Une connexion nue herite du
+    # fuseau par defaut du serveur (UTC sur Render) et depose donc l'heure murale UTC, soit
+    # Montreal + 4 h. Toute connexion applicative, elle, pose `America/Montreal`
+    # (Constructo_AI_Prod/database_config.py:413 et :442) — ce script etait le seul a ne pas
+    # le faire.
+    #
+    # Degat MESURE le 2026-08-17 : 1431 des 1437 lignes de `emails` portaient un
+    # `created_at` = `updated_at` a +4 h. Les vraies dates du courriel (`date_sent`,
+    # `date_received`) etaient justes — seuls les horodatages de tenue de livre derivaient,
+    # ce qui rend le defaut DISCRET : rien ne casse, la donnee ment.
+    # ⚠️ Et il s'est fait passer pour autre chose : mesure a 18:09, l'avance apparente n'etait
+    # que de +39 min, ce qui a fait ECARTER l'hypothese du fuseau. L'avance apparente vaut
+    # toujours `offset − temps ecoule depuis l'ecriture`, jamais l'offset brut.
+    #
+    # POURQUOI EN OPTION DE CONNEXION ET NON `cur.execute("SET TIME ZONE ...")`.
+    # ⚠️ ATTENTION A LA RAISON : une premiere version de ce commentaire invoquait la boucle
+    # SAVEPOINT, et c'etait FAUX — mesure sur un PostgreSQL 18 jetable, autocommit=False comme
+    # ici : un GUC pose AVANT un savepoint SURVIT a `ROLLBACK TO SAVEPOINT`. Seul un
+    # `conn.rollback()` COMPLET le perd, et le seul de ce fichier est terminal (il precede un
+    # `return`), donc aucune « ligne suivante » ne repartirait en UTC.
+    # La vraie raison est plus simple et, elle, mesuree : pose dans le paquet de DEMARRAGE, le
+    # fuseau est actif des l'autorisation et RESISTE a un rollback complet, alors qu'un `SET` nu
+    # ne le fait pas. C'est aussi ce qui distingue ce script de l'ERP, qui utilise bien un `SET`
+    # nu (Constructo_AI_Prod/database_config.py:413 et :442) — mais lui pose
+    # ISOLATION_LEVEL_AUTOCOMMIT juste avant (:409, :439), ce que ce script ne fait pas.
+    #
+    # ⚠️ ET CE MOT-CLE ECRASE, IL N'AJOUTE PAS. `make_dsn` de psycopg2 2.9.11 fait
+    # `tmp = parse_dsn(dsn); tmp.update(kwargs)` : un `options=` deja present DANS le DSN serait
+    # REMPLACE en silence. Aucun des DSN utilises ici n'en porte (`CONSTRUCTO_DB_URL` /
+    # `DATABASE_URL`, lus tels quels plus haut), mais si l'un venait a en porter un, il faudrait
+    # CONCATENER au lieu de remplacer.
+    try:
+        _opts_dsn = (psycopg2.extensions.parse_dsn(dsn).get("options") or "").strip()
+    except Exception:
+        _opts_dsn = ""          # DSN non analysable : `connect` le dira mieux que nous
+    _options = f"{_opts_dsn} -c timezone=America/Montreal".strip()
+    try:
+        conn = psycopg2.connect(dsn, connect_timeout=25, options=_options)
+    except Exception as exc:
+        # Hors du `try` principal, ce `connect` rendait une trace nue et le code 1 -- qui, dans
+        # la convention de ce fichier, veut dire « des lignes ont echoue » alors que RIEN n'a
+        # ete ecrit. C'est un refus avant ecriture : code 2.
+        return _echec(f"connexion impossible ({type(exc).__name__}) : {exc}")
+    # TEMOIN : ne JAMAIS supposer qu'un reglage a pris. On le relit, et on refuse d'ecrire s'il
+    # n'a pas pris — mieux vaut ne rien inserer que de reinserer 1431 lignes fausses.
+    #
+    # ⚠️ IL VIT HORS DU `try` PRINCIPAL, ET C'EST DELIBERE. Ce dernier rend le code 3, dont le
+    # contrat est « l'import est MORT EN COURS et des lignes SONT durablement en base ». Une
+    # panne ICI — curseur refuse, connexion coupee pendant `SHOW timezone` — survient avant la
+    # moindre ecriture : l'annoncer en code 3 enverrait l'operateur chercher des lignes qui
+    # n'existent pas. C'est un refus avant ecriture, donc code 2.
     try:
         cur = conn.cursor()
+        cur.execute("SHOW timezone")
+        _tz = cur.fetchone()[0]
+    except Exception as exc:
+        conn.close()
+        return _echec(f"lecture du fuseau de la session impossible "
+                      f"({type(exc).__name__}) : {exc}. AUCUNE ligne ecrite.")
+    if _tz != "America/Montreal":
+        conn.rollback()
+        conn.close()
+        # Code 2 et non 1 : le contrat de `_echec` reserve 2 au refus AVANT toute ecriture,
+        # base INTACTE — c'est exactement ce cas. 1 signifie « des lignes ont echoue ».
+        return _echec(
+            f"fuseau de la session = '{_tz}', attendu 'America/Montreal'.\n"
+            "         created_at/updated_at sont `timestamp WITHOUT time zone` : ecrire\n"
+            "         maintenant y deposerait des horodatages decales (le defaut du\n"
+            "         2026-08-17, 1431 lignes a +4 h). AUCUNE ligne ecrite.")
+
+    try:
         for l in toutes:
             # POINT DE REPRISE PAR MESSAGE. Sans lui, un seul message fautif
             # (un octet nul dans l'objet suffit, psycopg2 leve) faisait un
@@ -469,10 +543,15 @@ def main() -> int:
             f"jalon et SONT EN BASE.\n"
             f"    Ce nombre est une BORNE INFERIEURE si la connexion est morte.\n"
             f"\n"
-            f"    Compte exact de CETTE execution (connexion neuve, ne supprime rien) :\n"
-            f"        python scripts/outlook_vers_bd.py --annuler --run {RUN_ID}\n"
-            f"    Pour retirer CETTE execution seulement :\n"
-            f"        python scripts/outlook_vers_bd.py --annuler --run {RUN_ID} --oui\n"
+            f"    Compte exact de CETTE execution (ne supprime rien) :\n"
+            f"        SELECT count(*) FROM {SCHEMA}.emails\n"
+            f"         WHERE labels_json ? '{RUN_ID}';\n"
+            f"    Pour retirer CETTE execution seulement, le MEME WHERE une fois\n"
+            f"    le compte verifie :\n"
+            f"        DELETE FROM {SCHEMA}.emails\n"
+            f"         WHERE labels_json ? '{RUN_ID}';\n"
+            f"    (Reimporter ne demande AUCUNE suppression : l'import deduplique\n"
+            f"     sur message_id.)\n"
             f"\n"
             f"    ⚠️  Code de sortie 3 : des lignes SONT en base. A ne pas\n"
             f"       confondre avec le code 2, qui veut dire « rien n'a ete fait ».",
@@ -486,8 +565,24 @@ def main() -> int:
     # sert a rien s'il reste secret. Releve au retest #205 tour 5.
     if ecrits:
         print(f"Etiquette de cette execution : {RUN_ID}")
-        print(f"Pour l'annuler : python scripts/outlook_vers_bd.py "
-              f"--annuler --run {RUN_ID} --oui")
+        # ⚠️ CE MESSAGE A ORIENTE VERS UNE COMMANDE MORTE. Il imprimait
+        # `--annuler --run <id> --oui` — un drapeau RETIRE (cf. la docstring du
+        # module : six tours de retest lui avaient trouve six facons de supprimer
+        # PLUS que ce qu'il annoncait). argparse le refuse desormais. Chaque import
+        # REUSSI se terminait donc par une commande impossible, et le chemin de
+        # panne menait a un cul-de-sac au moment ou l'operateur en a le plus besoin.
+        # ⚠️ LE COMPTE D'ABORD, LA SUPPRESSION ENSUITE — et dans CET ordre a l'ecran.
+        # Une premiere version n'imprimait ici que le `DELETE`. C'est le chemin le PLUS
+        # frequente du script, et il tendait donc a l'operateur une suppression nue, prete a
+        # coller, sur le seul chemin ou la discipline « verifier le compte d'abord » n'etait pas
+        # appliquee — alors que c'est precisement elle qui a justifie le RETRAIT de `--annuler`.
+        print("Pour la retirer, apres avoir verifie l'hote de la connexion,")
+        print("le compte D'ABORD (il ne supprime rien) :")
+        print(f"    SELECT count(*) FROM {SCHEMA}.emails")
+        print(f"     WHERE labels_json ? '{RUN_ID}';")
+        print("puis, une fois le compte verifie, LE MEME WHERE :")
+        print(f"    DELETE FROM {SCHEMA}.emails")
+        print(f"     WHERE labels_json ? '{RUN_ID}';")
     for m in echecs[:8]:
         print(f"  - {m}")
     return 0 if not echecs else 1
