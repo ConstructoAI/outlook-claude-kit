@@ -16,3 +16,18 @@ exports/
 # Propre a un poste : le versionner ferait croire a une autre machine que des
 # messages sont deja partis, et ils ne partiraient jamais.
 .bridge_state.json
+
+# =====================================================================
+#  CE DEPOT EST PUBLIC. Rien de ce qui nomme un client, un tenant, un
+#  identifiant de service ou une decision d'affaires ne doit y entrer.
+#
+#  Retire du suivi le 2026-08-20 : le profil du representant et le gros
+#  document d'exploitation nommaient de vraies personnes (Kim Lamontagne,
+#  Alexy Mathon, Robert Cyrenne) et des identifiants Render. Ils vivent
+#  desormais dans le depot PRIVE Constructo_Pilotage, sous profils/ et
+#  courriels/. Le kit, lui, reste un outil generique.
+# =====================================================================
+profiles/CONSTRUCTO_AI_profil.txt
+docs/PROMPT_PROCHAINE_SESSION_Emails.md
+docs/ETAT.md
+docs/COURRIELS.md

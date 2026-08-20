@@ -10,6 +10,27 @@ l'utilisateur, l'outil fonctionne.
 
 ## Au démarrage d'une session
 
+⚠️ **CE DÉPÔT EST PUBLIC.** Le kit est un outil générique : il ne contient
+aucun nom de client, aucun tenant, aucun identifiant de service, aucune
+décision d'affaires. Ne jamais en écrire ici — même dans un commentaire,
+même dans un exemple.
+
+**Les documents d'exploitation ont été sortis d'ici le 2026-08-20** parce
+qu'ils nommaient de vraies personnes. Ils vivent maintenant dans le dépôt
+**privé** compagnon, `Constructo_Pilotage`, qui embarque ce kit en
+sous-module :
+
+| Ce qu'on cherche | Où c'est |
+|---|---|
+| L'état courant, le mandat, l'index des pièges | `<pilotage>/courriels/ETAT.md` |
+| La carte des correspondants | `<pilotage>/courriels/COURRIELS.md` |
+| La référence au long | `<pilotage>/courriels/PROMPT_PROCHAINE_SESSION_Emails.md` |
+| Le profil du représentant (le rôle) | `<pilotage>/profils/CONSTRUCTO_AI_profil.txt` |
+
+Depuis le sous-module, `<pilotage>` est le dossier deux crans au-dessus :
+`../../`. **Commencer par lire `ETAT.md`** — deux minutes. Ne pas lire la
+référence au long en entier : y aller par la section que l'index désigne.
+
 Vérifier l'environnement avant toute autre chose :
 
 ```bash
